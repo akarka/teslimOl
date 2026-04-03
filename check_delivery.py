@@ -57,34 +57,35 @@ def get_report_html(project_root, ref_file):
             
             for f in all_pdfs:
                 filename = f["name"]
-                # Tüm eşleşmeleri bul (Case-Insensitive)
+                found_in_file = False
+                
+                # 1. Tam Eşleşme (Boundary-aware: A-101, A-1011'i veya A-10'u yakalamaz)
                 for m in re.finditer(sheet_esc, filename, re.I):
                     start, end = m.span()
-                    
-                    # 1. Aralık Başlangıcı Kontrolü: ID-ID... veya ID_ID...
-                    is_range_start = False
-                    if end < len(filename) and filename[end] in "-_":
-                        next_part = filename[end+1:]
-                        # Eğer devamında gerçek bir ID geliyorsa aralıktır (Örn: _010 veya -A-001)
-                        if re.match(r"^(\d{2,}|[A-Z]-\d+)", next_part, re.I):
-                            is_range_start = True
-                    
-                    # 2. Aralık Sonu Kontrolü: ...ID-ID veya ...ID_ID
-                    is_range_end = False
-                    if start > 0 and filename[start-1] in "-_":
-                        prev_part = filename[:start-1]
-                        # Eğer öncesinde gerçek bir ID ile bitiyorsa aralıktır (Örn: 010_ veya A-001-)
-                        if re.search(r"(\d{2,}|[A-Z]-\d+)$", prev_part, re.I):
-                            is_range_end = True
-                    
-                    # Eğer ne başlangıç ne de son aralık parçasıysa, bu pafta bu dosyaya aittir.
-                    if not is_range_start and not is_range_end:
-                        if loc.upper() in f["root"].upper().replace("_", "-"):
-                            sheet["found_files"].append(f)
-                        else:
-                            sheet["other_loc_files"].append(f)
-                        break # Bu dosya için bu paftayı bulduk, diğer eşleşmelere bakmaya gerek yok.
-
+                    pre_ok = (start == 0 or not filename[start-1].isalnum())
+                    post_ok = (end == len(filename) or not filename[end].isalnum())
+                    if pre_ok and post_ok:
+                        found_in_file = True; break
+                
+                # 2. Liste/Aralık Fallback (Örn: A-SD-WA-003'ü ...A-SD-WA-002...01-02-03 içinde bulur)
+                if not found_in_file:
+                    m_parts = re.match(r"^(.*?)(\d+)$", sheet_no)
+                    if m_parts:
+                        prefix, num_str = m_parts.groups()
+                        # Prefiks yeterince uzunsa ve dosyada varsa, sadece rakamı ara
+                        if len(prefix) > 2 and prefix.lower() in filename.lower():
+                            num_int = int(num_str)
+                            # Standalone rakam kontrolü (03, 3 veya 003)
+                            pattern = rf"(?<!\d)({num_str}|{num_int}|{num_int:02d})(?!\d)"
+                            if re.search(pattern, filename):
+                                found_in_file = True
+                
+                if found_in_file:
+                    if loc.upper() in f["root"].upper().replace("_", "-"):
+                        sheet["found_files"].append(f)
+                    else:
+                        sheet["other_loc_files"].append(f)
+    
     rows_html = ""
     for loc, sheets in groups.items():
         total_sheets = len(sheets)
@@ -93,7 +94,6 @@ def get_report_html(project_root, ref_file):
             df = s["found_files"] if s["found_files"] else s["other_loc_files"]
             if not df: continue
             unique_names = set(f["name"] for f in df)
-            # Mükerrer: Aynı isimli dosya birden fazla varsa
             is_dup = len(unique_names) < len(df)
             has_zero = any(f["size"] == 0 for f in df)
             if not is_dup and not has_zero:
@@ -136,9 +136,10 @@ def get_report_html(project_root, ref_file):
                 status_badge_bg = "bg-success"
                 row_class = ""
             
-            names = "".join([f"<small>{f['name']}{('<span class=\"loc-hint\"> ['+os.path.basename(f['root'])+']</span>' if 'FARKLI' in status_text else '')}</small>" for f in display_files])
-            sizes = "".join([f"<small class=\"{'text-danger fw-bold' if f['size'] == 0 else ''}\">{round(f['size']/1024, 1)} KB{(' (BOŞ!)' if f['size'] == 0 else '')}</small>" for f in display_files])
-            dates = "".join([f"<small>{f['date']}</small>" for f in display_files])
+            # Birden fazla dosya varsa aralarına <br> koyarak listele
+            names = "<br>".join([f"<small>{f['name']}{('<span class=\"loc-hint\"> ['+os.path.basename(f['root'])+']</span>' if 'FARKLI' in status_text else '')}</small>" for f in display_files])
+            sizes = "<br>".join([f"<small class=\"{'text-danger fw-bold' if f['size'] == 0 else ''}\">{round(f['size']/1024, 1)} KB{(' (BOŞ!)' if f['size'] == 0 else '')}</small>" for f in display_files])
+            dates = "<br>".join([f"<small>{f['date']}</small>" for f in display_files])
             rows_html += f"""<tr class="sheet-row row-{folder_id} {row_class}"><td></td><td class="ps-5">{s['sheet_no']}</td><td><span class="badge {status_badge_bg} badge-fixed">{status_text}</span></td><td>{names if display_files else '-'}</td><td>{sizes if display_files else '-'}</td><td>{dates if display_files else '-'}</td></tr>"""
     return rows_html
 
